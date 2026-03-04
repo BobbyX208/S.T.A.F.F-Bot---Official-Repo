@@ -1,0 +1,25 @@
+{
+    "bot": {
+        "name": "StaffBot",
+        "version": "1.0.0",
+        "status": "online",
+        "activity": "Watching for updates"
+    },
+    "colors": {
+        "primary": 0x5865F2,
+        "success": 0x57F287,
+        "warning": 0xFEE75C,
+        "error": 0xED4245
+    },
+    "git": {
+        "auto_reload": true,
+        "reload_command": "reload",
+        "allowed_roles": ["Admin", "Moderator"]
+    },
+    "messages": {
+        "reload_success": "✅ Successfully reloaded {extensions} extension(s)",
+        "reload_fail": "❌ Failed to reload {extensions}: {error}",
+        "git_pull_success": "📥 Git pull completed. Changes detected in: {files}",
+        "git_pull_no_changes": "✅ No changes detected in repository"
+    }
+}
