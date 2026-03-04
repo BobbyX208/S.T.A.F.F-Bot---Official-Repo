@@ -1,8 +1,8 @@
 import os
-import subprocess
 import asyncio
-from typing import List, Optional
+from typing import List
 import git
+from git.exc import GitCommandError, InvalidGitRepositoryError
 from discord.ext import commands, tasks
 import discord
 from dotenv import load_dotenv
@@ -13,325 +13,263 @@ load_dotenv()
 logger = get_logger(__name__)
 
 class GitManager(commands.Cog):
-    """Manages automatic git pulls and hot reloading of extensions"""
+    """Production-hardened Git auto-update system"""
     
     def __init__(self, bot):
         self.bot = bot
-        self.repo_url = f"https://github.com/{os.getenv('GITHUB_REPO')}.git" if os.getenv('GITHUB_REPO') else None
+        self.repo_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.repo_url = os.getenv('GITHUB_REPO')
         self.branch = os.getenv('GITHUB_BRANCH', 'main')
         self.poll_interval = int(os.getenv('GITHUB_POLL_INTERVAL', 60))
-        self.repo_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        self.last_commit_hash = None
+        self.enabled = os.getenv('ENABLE_GIT_SYNC', 'false').lower() == 'true'
+        self.fetch_timeout = 30  # seconds
         
-        # Start the auto-pull task
-        if self.repo_url:
-            self.auto_pull.start()
-            logger.info(f"Git auto-pull enabled for {self.repo_url} ({self.branch})")
+        # Sync lock to prevent overlapping operations
+        self._sync_lock = asyncio.Lock()
+        
+        # Git repo reference
+        self.repo = None
+        
+        # Validate git repository exists
+        git_dir = os.path.join(self.repo_path, '.git')
+        if not os.path.exists(git_dir):
+            logger.error(f"❌ No .git folder found. Git sync DISABLED.")
+            self.enabled = False
+            return
+        
+        # Initialize repo
+        try:
+            self.repo = git.Repo(self.repo_path)
+            logger.info(f"✅ Git repository loaded")
+        except InvalidGitRepositoryError:
+            logger.error("❌ Invalid git repository. Git sync DISABLED.")
+            self.enabled = False
+            return
+        
+        # Validate remote exists
+        if 'origin' not in [r.name for r in self.repo.remotes]:
+            if self.repo_url:
+                try:
+                    self.repo.create_remote('origin', self.repo_url)
+                    logger.info(f"✅ Added remote origin: {self.repo_url}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to add remote: {e}")
+                    self.enabled = False
+                    return
+            else:
+                logger.error("❌ No remote 'origin' and no GITHUB_REPO set")
+                self.enabled = False
+                return
+        
+        # Start auto-sync if enabled
+        if self.enabled:
+            self.auto_sync.start()
+            logger.info(f"🔄 Auto-sync ENABLED (interval: {self.poll_interval}s, branch: {self.branch})")
+        else:
+            logger.info("⏸️ Auto-sync DISABLED (set ENABLE_GIT_SYNC=true to enable)")
     
     def cog_unload(self):
         """Clean up when cog is unloaded"""
-        self.auto_pull.cancel()
+        self.auto_sync.cancel()
     
-    @tasks.loop(seconds=60)
-    async def auto_pull(self):
-        """Background task to check for and pull updates from GitHub"""
-        # Wait for bot to be ready
-        await self.bot.wait_until_ready()
-        
+    async def _fetch(self) -> bool:
+        """Fetch from remote with timeout"""
         try:
-            # Check if it's time to pull (using configured interval)
-            if self.auto_pull.current_loop % (self.poll_interval // 60) != 0:
-                return
-            
-            logger.info("Checking for repository updates...")
-            
-            # Initialize or open repository
-            if not os.path.exists(os.path.join(self.repo_path, '.git')):
-                logger.warning("Not a git repository, cloning...")
-                await self._clone_repository()
-                return
-            
-            # Perform git pull
-            changed_files = await self._git_pull()
-            
-            if changed_files:
-                logger.info(f"Changes detected in: {', '.join(changed_files)}")
-                
-                # Auto-reload if enabled and changes are in cogs
-                if self._should_reload(changed_files):
-                    await self._reload_changed_extensions(changed_files)
-                    
-                    # Notify staff channel about reload
-                    await self._notify_reload(changed_files)
-            else:
-                logger.debug("No changes detected")
-                
-        except Exception as e:
-            logger.error(f"Error in auto_pull task: {e}")
-    
-    async def _clone_repository(self):
-        """Clone the repository if it doesn't exist"""
-        try:
-            # Run git clone in a thread pool to avoid blocking
-            def clone():
-                return git.Repo.clone_from(
-                    self.repo_url,
-                    self.repo_path,
-                    branch=self.branch
-                )
-            
-            repo = await asyncio.to_thread(clone)
-            self.last_commit_hash = str(repo.head.commit)
-            logger.info(f"Repository cloned successfully: {self.repo_url}")
-            
-            # Initial load of all extensions
-            await self._load_all_extensions()
-            
-        except Exception as e:
-            logger.error(f"Failed to clone repository: {e}")
-    
-    async def _git_pull(self) -> List[str]:
-        """Perform git pull and return list of changed files"""
-        try:
-            repo = git.Repo(self.repo_path)
-            
-            # Get current commit hash
-            current_hash = str(repo.head.commit)
-            
-            # Fetch updates
             def fetch():
-                origin = repo.remotes.origin
-                origin.fetch()
-                return origin
+                self.repo.remotes.origin.fetch(self.branch)
             
-            await asyncio.to_thread(fetch)
-            
-            # Check if there are changes
-            if current_hash == str(repo.head.commit):
-                return []
-            
-            # Perform pull
-            def pull():
-                origin = repo.remotes.origin
-                pull_info = origin.pull(self.branch)
-                
-                # Get changed files between old and new commit
-                diff = repo.git.diff(
-                    current_hash,
-                    pull_info[0].commit,
-                    name_only=True
-                ).split('\n')
-                
-                return [f for f in diff if f]
-            
-            changed_files = await asyncio.to_thread(pull)
-            self.last_commit_hash = str(repo.head.commit)
-            
-            return changed_files
-            
-        except Exception as e:
-            logger.error(f"Git pull failed: {e}")
-            return []
-    
-    def _should_reload(self, changed_files: List[str]) -> bool:
-        """Determine if we should reload based on changed files"""
-        # Reload if any Python files in cogs directory changed
-        for file in changed_files:
-            if file.startswith('cogs/') and file.endswith('.py'):
-                return True
-            if file == 'main.py' or file == 'database.py':
-                return True
-        return False
-    
-    async def _reload_changed_extensions(self, changed_files: List[str]):
-        """Reload extensions that were affected by changes"""
-        reloaded = []
-        failed = []
-        
-        for file in changed_files:
-            if file.startswith('cogs/') and file.endswith('.py'):
-                # Convert file path to extension name
-                extension = file.replace('/', '.').replace('.py', '')
-                
-                try:
-                    if extension in self.bot.extensions:
-                        await self.bot.reload_extension(extension)
-                        logger.info(f"Reloaded extension: {extension}")
-                        reloaded.append(extension)
-                    else:
-                        await self.bot.load_extension(extension)
-                        logger.info(f"Loaded new extension: {extension}")
-                        reloaded.append(extension)
-                        
-                except Exception as e:
-                    logger.error(f"Failed to reload {extension}: {e}")
-                    failed.append(extension)
-            
-            elif file == 'main.py':
-                logger.warning("main.py changed - full restart may be required")
-        
-        return reloaded, failed
-    
-    async def _notify_reload(self, changed_files: List[str]):
-        """Notify staff channel about reload"""
-        # Find first available staff channel
-        for guild in self.bot.guilds:
-            # Look for a channel named 'staff-commands' or 'admin-log'
-            channel = discord.utils.get(
-                guild.text_channels,
-                name__in=['staff-commands', 'admin-log', 'bot-log']
+            await asyncio.wait_for(
+                asyncio.to_thread(fetch),
+                timeout=self.fetch_timeout
             )
+            logger.debug(f"✅ Fetched origin/{self.branch}")
+            return True
             
-            if channel:
-                embed = discord.Embed(
-                    title="🔄 Auto-Reload Complete",
-                    description="Changes detected and extensions reloaded",
-                    color=0x5865F2
-                )
-                embed.add_field(
-                    name="Changed Files",
-                    value=f"```\n{', '.join(changed_files[:5])}\n```",
-                    inline=False
-                )
-                embed.set_footer(text=f"Commit: {self.last_commit_hash[:7]}")
-                
-                try:
-                    await channel.send(embed=embed)
-                except:
-                    pass
-                break
+        except asyncio.TimeoutError:
+            logger.error(f"❌ Fetch timeout after {self.fetch_timeout}s")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Fetch failed: {e}")
+            return False
     
-    async def _load_all_extensions(self):
-        """Load all extensions from cogs directory"""
-        import os
-        for filename in os.listdir('./cogs'):
-            if filename.endswith('.py') and filename != '__init__.py':
-                try:
-                    await self.bot.load_extension(f'cogs.{filename[:-3]}')
-                    logger.info(f"Loaded extension: cogs.{filename[:-3]}")
-                except Exception as e:
-                    logger.error(f"Failed to load cogs.{filename[:-3]}: {e}")
-    
-    @auto_pull.before_loop
-    async def before_auto_pull(self):
-        """Wait for bot to be ready before starting auto-pull"""
-        await self.bot.wait_until_ready()
-    
-    @commands.command(name='reload')
-    @commands.has_permissions(administrator=True)
-    async def reload_extension(self, ctx, extension: str = None):
-        """Reload a specific extension or all extensions"""
-        if not extension:
-            # Reload all extensions
+    async def _sync(self) -> bool:
+        """Core sync operation with safety checks"""
+        
+        # --- Layer 1: Repository Safety Checks ---
+        
+        # Check remote exists
+        if 'origin' not in [r.name for r in self.repo.remotes]:
+            logger.error("❌ No remote 'origin' configured. Sync aborted.")
+            return False
+        
+        # Check for local changes (warning only)
+        if self.repo.is_dirty(untracked_files=True):
+            logger.warning("⚠️ Local changes detected on production. They will be discarded.")
+        
+        # Get current commit
+        try:
+            old_commit = self.repo.head.commit.hexsha
+        except Exception as e:
+            logger.error(f"❌ Cannot get current commit: {e}")
+            return False
+        
+        # --- Layer 3: Network Safety (fetch with timeout) ---
+        if not await self._fetch():
+            return False
+        
+        # Verify remote branch exists
+        try:
+            remote_commit = self.repo.commit(f'origin/{self.branch}').hexsha
+        except Exception:
+            logger.error(f"❌ Remote branch origin/{self.branch} not found.")
+            return False
+        
+        # Compare commits
+        if old_commit == remote_commit:
+            logger.debug(f"No changes (both at {old_commit[:7]})")
+            return False
+        
+        logger.info(f"📥 Changes: {old_commit[:7]} -> {remote_commit[:7]}")
+        
+        # --- Hard reset (Git handles atomicity) ---
+        try:
+            def reset():
+                self.repo.git.reset('--hard', f'origin/{self.branch}')
+            
+            await asyncio.to_thread(reset)
+            logger.info(f"✅ Hard reset to origin/{self.branch}")
+        except Exception as e:
+            logger.error(f"❌ Reset failed: {e}")
+            return False
+        
+        # Get changed files
+        new_commit = self.repo.head.commit.hexsha
+        
+        try:
+            def get_diff():
+                return self.repo.git.diff('--name-only', old_commit, new_commit).splitlines()
+            
+            changed_files = await asyncio.to_thread(get_diff)
+        except Exception as e:
+            logger.error(f"Failed to get changed files: {e}")
+            changed_files = []
+        
+        if changed_files:
+            logger.info(f"📁 Files changed: {len(changed_files)}")
+            
+            # --- Layer 2: Crash Containment (reload each cog independently) ---
             reloaded = []
             failed = []
             
-            for ext in list(self.bot.extensions.keys()):
-                try:
-                    await self.bot.reload_extension(ext)
-                    reloaded.append(ext)
-                except Exception as e:
-                    failed.append(f"{ext}: {e}")
+            for file_path in changed_files:
+                if file_path.startswith('cogs/') and file_path.endswith('.py'):
+                    extension = file_path.replace('/', '.').replace('.py', '')
+                    
+                    try:
+                        if extension in self.bot.extensions:
+                            await self.bot.reload_extension(extension)
+                        else:
+                            await self.bot.load_extension(extension)
+                        logger.info(f"  ✅ {extension}")
+                        reloaded.append(extension)
+                    except Exception as e:
+                        logger.error(f"  ❌ {extension}: {e}")
+                        failed.append(extension)
+                
+                elif file_path == 'main.py':
+                    logger.warning("⚠️ main.py changed - Manual restart required")
             
-            embed = discord.Embed(
-                title="🔄 Extension Reload",
-                color=0x57F287 if not failed else 0xED4245
-            )
-            
+            # Log summary
             if reloaded:
-                embed.add_field(
-                    name="✅ Reloaded",
-                    value=f"```\n{chr(10).join(reloaded[:10])}\n```",
-                    inline=False
-                )
-            
+                logger.info(f"✅ Reloaded {len(reloaded)} cogs")
             if failed:
-                embed.add_field(
-                    name="❌ Failed",
-                    value=f"```\n{chr(10).join(failed[:5])}\n```",
-                    inline=False
-                )
-            
-            await ctx.send(embed=embed)
-            
-        else:
-            # Reload specific extension
-            try:
-                await self.bot.reload_extension(f'cogs.{extension}')
-                await ctx.send(f"✅ Successfully reloaded `cogs.{extension}`")
-            except Exception as e:
-                await ctx.send(f"❌ Failed to reload `cogs.{extension}`: {e}")
+                logger.warning(f"❌ Failed {len(failed)} cogs")
+        
+        return True
     
-    @commands.command(name='gitpull')
+    @tasks.loop(seconds=60)
+    async def auto_sync(self):
+        """Background sync task with lock protection"""
+        await self.bot.wait_until_ready()
+        
+        # Calculate poll interval
+        interval_factor = max(1, self.poll_interval // 60)
+        if self.auto_sync.current_loop % interval_factor != 0:
+            return
+        
+        # --- Layer 4: Lock protection (no overlapping syncs) ---
+        async with self._sync_lock:
+            try:
+                logger.info("🔍 Checking for updates...")
+                await self._sync()
+            except Exception as e:
+                logger.error(f"❌ Sync error: {e}")
+    
+    @auto_sync.before_loop
+    async def before_auto_sync(self):
+        await self.bot.wait_until_ready()
+        logger.info("Git sync system ready")
+    
+    @commands.command(name='sync')
     @commands.has_permissions(administrator=True)
-    async def manual_git_pull(self, ctx):
-        """Manually trigger a git pull"""
+    async def manual_sync(self, ctx):
+        """Manually trigger git sync"""
+        if not self.enabled:
+            await ctx.send("❌ Git sync is disabled")
+            return
+        
         async with ctx.typing():
-            changed_files = await self._git_pull()
-            
-            if changed_files:
-                reloaded, failed = await self._reload_changed_extensions(changed_files)
-                
-                embed = discord.Embed(
-                    title="📥 Manual Git Pull Complete",
-                    color=0x57F287
-                )
-                embed.add_field(
-                    name="Changed Files",
-                    value=f"```\n{', '.join(changed_files[:10])}\n```",
-                    inline=False
-                )
-                
-                if reloaded:
-                    embed.add_field(
-                        name="Reloaded Extensions",
-                        value=f"```\n{', '.join(reloaded)}\n```",
-                        inline=False
-                    )
-                
-                await ctx.send(embed=embed)
-            else:
-                await ctx.send("✅ No changes detected in repository")
+            async with self._sync_lock:
+                try:
+                    success = await self._sync()
+                    if success:
+                        await ctx.send(f"✅ Sync completed. Current: `{self.repo.head.commit.hexsha[:7]}`")
+                    else:
+                        await ctx.send("✅ Already up to date")
+                except Exception as e:
+                    await ctx.send(f"❌ Sync failed: {e}")
     
     @commands.command(name='gitstatus')
     @commands.has_permissions(administrator=True)
     async def git_status(self, ctx):
-        """Show current git status"""
+        """Show git status"""
         try:
-            repo = git.Repo(self.repo_path)
+            if not self.repo:
+                await ctx.send("❌ No git repository")
+                return
+            
+            # Get commits
+            local = self.repo.head.commit.hexsha[:7]
+            
+            try:
+                await self._fetch()
+                remote = self.repo.commit(f'origin/{self.branch}').hexsha[:7]
+            except:
+                remote = "unknown"
+            
+            is_dirty = self.repo.is_dirty(untracked_files=True)
             
             embed = discord.Embed(
                 title="📊 Git Status",
-                color=0x5865F2
-            )
-            embed.add_field(
-                name="Branch",
-                value=f"`{repo.active_branch.name}`",
-                inline=True
-            )
-            embed.add_field(
-                name="Latest Commit",
-                value=f"`{str(repo.head.commit)[:7]}`",
-                inline=True
-            )
-            embed.add_field(
-                name="Remote",
-                value=f"`{self.repo_url}`",
-                inline=True
+                color=0x5865F2,
+                timestamp=discord.utils.utcnow()
             )
             
-            # Check for uncommitted changes
-            if repo.is_dirty():
-                embed.add_field(
-                    name="⚠️ Warning",
-                    value="There are uncommitted changes",
-                    inline=False
-                )
+            embed.add_field(name="Branch", value=f"`{self.branch}`", inline=True)
+            embed.add_field(name="Local", value=f"`{local}`", inline=True)
+            embed.add_field(name="Remote", value=f"`{remote}`", inline=True)
+            embed.add_field(name="Auto-Sync", value="✅ On" if self.enabled else "❌ Off", inline=False)
+            
+            if local != remote and remote != "unknown":
+                embed.add_field(name="📥 Status", value="Behind remote", inline=False)
+            
+            if is_dirty:
+                embed.add_field(name="⚠️ Warning", value="Local uncommitted changes", inline=False)
             
             await ctx.send(embed=embed)
             
         except Exception as e:
-            await ctx.send(f"❌ Error getting git status: {e}")
+            await ctx.send(f"❌ Error: {e}")
 
 async def setup(bot):
     await bot.add_cog(GitManager(bot))
