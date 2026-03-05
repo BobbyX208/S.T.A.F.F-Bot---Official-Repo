@@ -89,6 +89,10 @@ S.T.A.F.F-Bot/
 | ✅ **Pterodactyl Ready** | Works in shared hosting, persistent storage |
 | ✅ **Fetch Timeout** | 30s network guard, no hanging |
 | ✅ **Large Diff Protection** | Limits reload storm to 50 files |
+| ✅ **Commit Comparison** | Only pulls when changes exist |
+| ✅ **Broken Code Survival** | One bad cog won't crash the bot |
+| ✅ **Sync Locking** | No overlapping updates |
+| ✅ **Local Change Warning** | Alerts if files modified manually |
 
 ---
 
@@ -247,7 +251,7 @@ python main.py
 
 ---
 
-🧪 Testing the Auto-Update
+**🧪 Testing the Auto-Update**
 
 S.T.A.F.F. Bot monitors your GitHub branch. To update the production bot:
 
@@ -268,7 +272,7 @@ git push origin main
 
 ---
 
-🛠️ Staff Commands
+**🛠️ Staff Commands**
 
 Command Description Permission
 !sync Manual git sync trigger Administrator
@@ -277,7 +281,7 @@ Command Description Permission
 
 ---
 
-🏭 Production Deployment (Pterodactyl)
+**🏭 Production Deployment (Pterodactyl)**
 
 1. Create a new Pterodactyl egg using Python 3.10+
 2. Set working directory to /home/container
@@ -291,30 +295,69 @@ Command Description Permission
 
 ---
 
-🔒 Security Notes
+**🔒 Security Notes**
 
-· .env is in .gitignore - never commit secrets
-· Bot only pulls from GitHub, never pushes
+· .env is in .gitignore - never commit secrets to your repository
+· Bot only pulls from GitHub, never pushes changes upstream
 · All sync operations use git reset --hard - production mirrors remote exactly
-· Local changes on production are warned and overwritten
-· Commands restricted to Administrators
+· Local changes on production are warned and overwritten during sync
+· Commands are restricted to users with Administrator permission
+· Database credentials are stored in .env, never in code
+· GitHub token (if used) has minimum required permissions (only read access needed)
+· No user data is ever sent to GitHub - sync is code-only
+· Rate limiting protects against abuse
+· All operations are logged for audit trails
 
 ---
 
-📊 Current Status (March 2026)
+**📊 Current Status (March 2026)**
 
-Phase Status Completion
-Phase 1: Foundation ✅ COMPLETE 100%
-Phase 2: Ticket System 🔨 IN PROGRESS 15%
-Phase 3: Staff Management ⏸️ PLANNED 0%
-Phase 4: Broadcasting ⏸️ PLANNED 0%
-Phase 5: Welcomer ⏸️ PLANNED 0%
-Phase 6: Auto-Mod ⏸️ PLANNED 0%
-Phase 7: Control UI ⏸️ PLANNED 0%
+Phase Feature Status Completion ETA
+1. Foundation ✅ COMPLETE 100% DONE
+2. Smart Tickets 🔨 IN PROGRESS
+3. Staff Management ⏸️ PLANNED
+4. Broadcasting ⏸️ PLANNED
+5. Interactive Welcomer ⏸️ PLANNED
+6. Auto-Moderation ⏸️ PLANNED
+7. Command & Control ⏸️ PLANNED
+
+What Works Right Now (Phase 1)
+
+· ✅ Auto-updating git core - push code, bot updates
+· ✅ Git status commands - !gitstatus, !sync
+· ✅ Cog reloading - !reload
+· ✅ Production logging with rotation
+· ✅ Multi-database support (PostgreSQL/MySQL/JSON)
+· ✅ Network timeout protection (30s)
+· ✅ Broken code survival - one bad cog won't crash bot
+· ✅ Pterodactyl compatibility
+· ✅ Cross-platform paths (Windows/Linux)
+
+What's Coming Next (Phase 2)
+
+· 🔄 Category-based ticket system
+· 🔄 Smart modals per ticket type
+· 🔄 Claim system with channel renaming
+· 🔄 HTML transcript generation
+· 🔄 "Add Member" functionality
+· 🔄 Unclaimed ticket alerts
 
 ---
 
-🤝 Contributing
+**📈 Performance Metrics**
+
+Metric Value
+CPU impact <1% per sync check
+Memory baseline ~50MB
+Network per check ~10KB
+Reload time per cog <1s
+Max files processed 50 per sync
+Fetch timeout 30s
+Poll interval Configurable (default 60s)
+
+---
+
+**🤝 Contributing**
 
 This is a living project. Each phase builds on the last.
 
@@ -324,42 +367,49 @@ This is a living project. Each phase builds on the last.
 4. Submit a PR
 5. Watch the production bot live-update upon merge
 
-Contribution Guidelines:
+**Contribution Guidelines**
 
 · Follow the existing code structure
 · Use cog_unload() for clean task management
 · Keep cogs lightweight, move heavy logic to /utils
 · Add comprehensive logging
 · Update this README if adding features
+· Include docstrings for all methods
+· Test with both PostgreSQL and JSON backends
 
 ---
 
-📈 Performance
-
-· CPU impact: Negligible (git fetch every 60s)
-· Memory: ~50MB baseline
-· Network: ~10KB per check
-· Reload time: <1s per changed cog
-
----
-
-🙏 Acknowledgments
+**🙏 Acknowledgments**
 
 Built with:
 
-· discord.py
-· GitPython
-· Pterodactyl Panel
+· discord.py - The best Discord library
+· GitPython - Git integration
+· Pterodactyl Panel - Game panel hosting
+· asyncpg - PostgreSQL driver
+· aiomysql - MySQL driver
 
 ---
 
-📝 License
+## 📝 License
 
 MIT License - feel free to use, modify, and distribute.
 
+Copyright (c) 2026 S.T.A.F.F. Bot Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
 ---
 
-🎯 The Bottom Line
+**🎯 The Bottom Line**
 
 This bot doesn't need you to restart it. Push code, and it just works. That's the entire point.
 
@@ -382,8 +432,14 @@ Zero downtime. Zero manual intervention. Just works. 🚀
 
 <div align="center">
 
-Star ⭐ this repo if you want a bot that actually works
+⭐ Star this repo if you want a bot that actually works
 
-Report Bug · Request Feature
+Found a bug? Report it here
+Want a feature? Request it here
+Have questions? Start a discussion
+
+---
+
+Built with ❤️ for Discord staff teams everywhere
 
 </div>
