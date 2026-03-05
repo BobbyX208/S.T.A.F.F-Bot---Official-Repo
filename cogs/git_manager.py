@@ -189,7 +189,27 @@ class GitManager(commands.Cog):
                 logger.info(f"✅ Reloaded {len(reloaded)} cogs")
             if failed:
                 logger.warning(f"❌ Failed {len(failed)} cogs")
-        
+
+        # Dispatch GitHub event for logging
+        if changed_files:
+            try:
+                commit_data = {
+                    'repo': self.repo_url,
+                    'branch': self.branch,
+                    'commits': [{
+                        'id': new_commit,
+                        'message': self.repo.head.commit.message.strip(),
+                        'author': str(self.repo.head.commit.author)
+                    }],
+                    'files_changed': changed_files[:20],
+                    'total_files': len(changed_files),
+                    'old_commit': old_commit,
+                    'new_commit': new_commit
+                }
+                self.bot.dispatch('git_sync_complete', commit_data)
+                logger.debug(f"Dispatched git_sync_complete event with {len(changed_files)} files")
+            except Exception as e:
+                logger.error(f"Failed to dispatch git event: {e}")
         return True
     
     @tasks.loop(seconds=60)  # Default, changed in __init__
