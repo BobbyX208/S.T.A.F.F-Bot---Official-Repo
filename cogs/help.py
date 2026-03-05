@@ -288,5 +288,30 @@ class Help(commands.Cog):
         except:
             pass
 
+    @commands.command(name='forcesync')
+    @commands.has_permissions(administrator=True)
+    async def force_sync(self, ctx: commands.Context):
+        """Force sync all slash commands"""
+        async with ctx.typing():
+            try:
+                # Sync to current guild first (instant)
+                guild = discord.Object(id=ctx.guild.id)
+                self.bot.tree.copy_global_to(guild=guild)
+                synced = await self.bot.tree.sync(guild=guild)
+                
+                embed = discord.Embed(
+                    title="✅ Slash Commands Synced",
+                    color=0x57F287,
+                    timestamp=datetime.utcnow()
+                )
+                embed.add_field(name="Guild Commands", value=f"`{len(synced)}` commands synced to this server")
+                embed.add_field(name="Note", value="Global sync may take up to 1 hour", inline=False)
+                embed.set_footer(text="Commands should appear immediately in this server")
+                
+                await ctx.send(embed=embed)
+                
+            except Exception as e:
+                await ctx.send(f"❌ Sync failed: {e}")
+
 async def setup(bot):
     await bot.add_cog(Help(bot))
