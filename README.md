@@ -387,4 +387,3 @@ Star ⭐ this repo if you want a bot that actually works
 Report Bug · Request Feature
 
 </div>
-```
