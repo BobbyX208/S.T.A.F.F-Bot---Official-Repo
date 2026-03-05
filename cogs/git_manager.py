@@ -17,52 +17,54 @@ class GitManager(commands.Cog):
     
     def __init__(self, bot):
         self.bot = bot
-        self.repo_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.repo_path = os.getcwd()  # Pterodactyl launches here
+        
+        # Initialize ALL config vars first, then validate
+        self.enabled = os.getenv('ENABLE_GIT_SYNC', 'false').lower() == 'true'
         self.repo_url = os.getenv('GITHUB_REPO')
         self.branch = os.getenv('GITHUB_BRANCH', 'main')
         self.poll_interval = int(os.getenv('GITHUB_POLL_INTERVAL', 60))
-        self.enabled = os.getenv('ENABLE_GIT_SYNC', 'false').lower() == 'true'
         self.fetch_timeout = 30  # seconds
         
-        # Sync lock to prevent overlapping operations
-        self._sync_lock = asyncio.Lock()
+        # Early validation
+        if not self.repo_url:
+            logger.error("❌ GITHUB_REPO not set in .env")
+            self.enabled = False
+            return
         
-        # Git repo reference
+        # Sync lock
+        self._sync_lock = asyncio.Lock()
         self.repo = None
         
         # Validate git repository exists
         git_dir = os.path.join(self.repo_path, '.git')
         if not os.path.exists(git_dir):
-            logger.error(f"❌ No .git folder found. Git sync DISABLED.")
+            logger.error(f"❌ No .git folder found at {self.repo_path}")
             self.enabled = False
             return
         
         # Initialize repo
         try:
             self.repo = git.Repo(self.repo_path)
-            logger.info(f"✅ Git repository loaded")
+            logger.info(f"✅ Git repository loaded from {self.repo_path}")
         except InvalidGitRepositoryError:
-            logger.error("❌ Invalid git repository. Git sync DISABLED.")
+            logger.error("❌ Invalid git repository")
             self.enabled = False
             return
         
         # Validate remote exists
         if 'origin' not in [r.name for r in self.repo.remotes]:
-            if self.repo_url:
-                try:
-                    self.repo.create_remote('origin', self.repo_url)
-                    logger.info(f"✅ Added remote origin: {self.repo_url}")
-                except Exception as e:
-                    logger.error(f"❌ Failed to add remote: {e}")
-                    self.enabled = False
-                    return
-            else:
-                logger.error("❌ No remote 'origin' and no GITHUB_REPO set")
+            try:
+                self.repo.create_remote('origin', self.repo_url)
+                logger.info(f"✅ Added remote origin: {self.repo_url}")
+            except Exception as e:
+                logger.error(f"❌ Failed to add remote: {e}")
                 self.enabled = False
                 return
         
         # Start auto-sync if enabled
         if self.enabled:
+            self.auto_sync.change_interval(seconds=self.poll_interval)
             self.auto_sync.start()
             logger.info(f"🔄 Auto-sync ENABLED (interval: {self.poll_interval}s, branch: {self.branch})")
         else:
@@ -70,19 +72,20 @@ class GitManager(commands.Cog):
     
     def cog_unload(self):
         """Clean up when cog is unloaded"""
-        self.auto_sync.cancel()
+        if hasattr(self, 'auto_sync') and self.auto_sync.is_running():
+            self.auto_sync.cancel()
     
     async def _fetch(self) -> bool:
         """Fetch from remote with timeout"""
         try:
             def fetch():
-                self.repo.remotes.origin.fetch(self.branch)
+                self.repo.remotes.origin.fetch()
             
             await asyncio.wait_for(
                 asyncio.to_thread(fetch),
                 timeout=self.fetch_timeout
             )
-            logger.debug(f"✅ Fetched origin/{self.branch}")
+            logger.debug(f"✅ Fetched from origin")
             return True
             
         except asyncio.TimeoutError:
@@ -93,18 +96,16 @@ class GitManager(commands.Cog):
             return False
     
     async def _sync(self) -> bool:
-        """Core sync operation with safety checks"""
+        """Core sync operation"""
         
-        # --- Layer 1: Repository Safety Checks ---
-        
-        # Check remote exists
+        # Quick validation
         if 'origin' not in [r.name for r in self.repo.remotes]:
-            logger.error("❌ No remote 'origin' configured. Sync aborted.")
+            logger.error("❌ No remote 'origin' configured")
             return False
         
-        # Check for local changes (warning only)
+        # Warn about local changes (optional but useful)
         if self.repo.is_dirty(untracked_files=True):
-            logger.warning("⚠️ Local changes detected on production. They will be discarded.")
+            logger.warning("⚠️ Local changes detected - they will be overwritten")
         
         # Get current commit
         try:
@@ -113,7 +114,7 @@ class GitManager(commands.Cog):
             logger.error(f"❌ Cannot get current commit: {e}")
             return False
         
-        # --- Layer 3: Network Safety (fetch with timeout) ---
+        # Fetch with timeout
         if not await self._fetch():
             return False
         
@@ -121,17 +122,17 @@ class GitManager(commands.Cog):
         try:
             remote_commit = self.repo.commit(f'origin/{self.branch}').hexsha
         except Exception:
-            logger.error(f"❌ Remote branch origin/{self.branch} not found.")
+            logger.error(f"❌ Remote branch origin/{self.branch} not found")
             return False
         
-        # Compare commits
+        # Compare
         if old_commit == remote_commit:
             logger.debug(f"No changes (both at {old_commit[:7]})")
             return False
         
         logger.info(f"📥 Changes: {old_commit[:7]} -> {remote_commit[:7]}")
         
-        # --- Hard reset (Git handles atomicity) ---
+        # Hard reset
         try:
             def reset():
                 self.repo.git.reset('--hard', f'origin/{self.branch}')
@@ -157,13 +158,13 @@ class GitManager(commands.Cog):
         if changed_files:
             logger.info(f"📁 Files changed: {len(changed_files)}")
             
-            # --- Layer 2: Crash Containment (reload each cog independently) ---
             reloaded = []
             failed = []
             
-            for file_path in changed_files:
+            # Limit to first 50 files to prevent massive reload storms
+            for file_path in changed_files[:50]:
                 if file_path.startswith('cogs/') and file_path.endswith('.py'):
-                    extension = file_path.replace('/', '.').replace('.py', '')
+                    extension = file_path.replace(os.sep, '.').replace('.py', '')
                     
                     try:
                         if extension in self.bot.extensions:
@@ -176,8 +177,12 @@ class GitManager(commands.Cog):
                         logger.error(f"  ❌ {extension}: {e}")
                         failed.append(extension)
                 
-                elif file_path == 'main.py':
+                # Use .endswith() for main.py detection
+                elif file_path.endswith('main.py'):
                     logger.warning("⚠️ main.py changed - Manual restart required")
+            
+            if len(changed_files) > 50:
+                logger.warning(f"⚠️ Only processed first 50 of {len(changed_files)} changed files")
             
             # Log summary
             if reloaded:
@@ -187,20 +192,12 @@ class GitManager(commands.Cog):
         
         return True
     
-    @tasks.loop(seconds=60)
+    @tasks.loop(seconds=60)  # Default, changed in __init__
     async def auto_sync(self):
-        """Background sync task with lock protection"""
-        await self.bot.wait_until_ready()
-        
-        # Calculate poll interval
-        interval_factor = max(1, self.poll_interval // 60)
-        if self.auto_sync.current_loop % interval_factor != 0:
-            return
-        
-        # --- Layer 4: Lock protection (no overlapping syncs) ---
+        """Background sync task"""
         async with self._sync_lock:
             try:
-                logger.info("🔍 Checking for updates...")
+                logger.debug("Checking for updates...")
                 await self._sync()
             except Exception as e:
                 logger.error(f"❌ Sync error: {e}")
@@ -261,7 +258,7 @@ class GitManager(commands.Cog):
             embed.add_field(name="Auto-Sync", value="✅ On" if self.enabled else "❌ Off", inline=False)
             
             if local != remote and remote != "unknown":
-                embed.add_field(name="📥 Status", value="Behind remote", inline=False)
+                embed.add_field(name="📥 Status", value="Behind remote - run `!sync`", inline=False)
             
             if is_dirty:
                 embed.add_field(name="⚠️ Warning", value="Local uncommitted changes", inline=False)
