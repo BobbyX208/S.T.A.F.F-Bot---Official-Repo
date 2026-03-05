@@ -153,6 +153,153 @@ class DatabaseHandler:
             
         except Exception as e:
             logger.error(f"Error setting config {key}: {e}")
+
+# Add to database.py
+
+    async def get_guild_config(self, guild_id: int, module: str) -> dict:
+        """Get configuration for a specific module"""
+        try:
+            if self.db_type == 'json':
+                async with aiofiles.open('data/guild_configs.json', 'r') as f:
+                    data = json.loads(await f.read())
+                    return data.get(str(guild_id), {}).get(module, {})
+            else:
+                # SQL implementation
+                async with self.pool.acquire() as conn:
+                    row = await conn.fetchrow(
+                        "SELECT config FROM guild_configs WHERE guild_id = $1 AND module = $2",
+                        guild_id, module
+                    )
+                    return json.loads(row['config']) if row else {}
+        except:
+            return {}
+    
+    async def update_guild_config(self, guild_id: int, module: str, config: dict):
+        """Update configuration for a specific module"""
+        try:
+            if self.db_type == 'json':
+                async with aiofiles.open('data/guild_configs.json', 'r+') as f:
+                    data = json.loads(await f.read())
+                    if str(guild_id) not in data:
+                        data[str(guild_id)] = {}
+                    data[str(guild_id)][module] = config
+                    await f.seek(0)
+                    await f.write(json.dumps(data, indent=2))
+                    await f.truncate()
+            else:
+                # SQL implementation
+                async with self.pool.acquire() as conn:
+                    await conn.execute("""
+                        INSERT INTO guild_configs (guild_id, module, config, updated_at)
+                        VALUES ($1, $2, $3, NOW())
+                        ON CONFLICT (guild_id, module) 
+                        DO UPDATE SET config = $3, updated_at = NOW()
+                    """, guild_id, module, json.dumps(config))
+        except Exception as e:
+            logger.error(f"Failed to update guild config: {e}")
+    
+    async def create_ticket(self, ticket_data: dict) -> int:
+        """Create a new ticket record"""
+        try:
+            if self.db_type == 'json':
+                async with aiofiles.open('data/tickets.json', 'r+') as f:
+                    data = json.loads(await f.read())
+                    ticket_id = len(data) + 1
+                    ticket_data['id'] = ticket_id
+                    data[str(ticket_id)] = ticket_data
+                    await f.seek(0)
+                    await f.write(json.dumps(data, indent=2))
+                    await f.truncate()
+                    return ticket_id
+            else:
+                # SQL implementation
+                async with self.pool.acquire() as conn:
+                    ticket_id = await conn.fetchval("""
+                        INSERT INTO tickets (guild_id, channel_id, user_id, user_name, 
+                                           category_id, category_name, answers, status)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        RETURNING id
+                    """, ticket_data['guild_id'], ticket_data['channel_id'], 
+                        ticket_data['user_id'], ticket_data['user_name'],
+                        ticket_data['category_id'], ticket_data['category_name'],
+                        json.dumps(ticket_data['answers']), ticket_data['status'])
+                    return ticket_id
+        except Exception as e:
+            logger.error(f"Failed to create ticket: {e}")
+            return 0
+    
+    async def get_ticket(self, ticket_id: int) -> dict:
+        """Get ticket by ID"""
+        try:
+            if self.db_type == 'json':
+                async with aiofiles.open('data/tickets.json', 'r') as f:
+                    data = json.loads(await f.read())
+                    return data.get(str(ticket_id), {})
+            else:
+                # SQL implementation
+                async with self.pool.acquire() as conn:
+                    row = await conn.fetchrow("SELECT * FROM tickets WHERE id = $1", ticket_id)
+                    return dict(row) if row else {}
+        except:
+            return {}
+    
+    async def find_ticket(self, query: dict) -> dict:
+        """Find a ticket matching query"""
+        try:
+            if self.db_type == 'json':
+                async with aiofiles.open('data/tickets.json', 'r') as f:
+                    data = json.loads(await f.read())
+                    for tid, ticket in data.items():
+                        match = True
+                        for key, value in query.items():
+                            if ticket.get(key) != value:
+                                match = False
+                                break
+                        if match:
+                            return ticket
+            else:
+                # Build SQL query
+                conditions = []
+                values = []
+                for i, (key, value) in enumerate(query.items()):
+                    conditions.append(f"{key} = ${i+1}")
+                    values.append(value)
+                
+                sql = f"SELECT * FROM tickets WHERE {' AND '.join(conditions)} LIMIT 1"
+                async with self.pool.acquire() as conn:
+                    row = await conn.fetchrow(sql, *values)
+                    return dict(row) if row else {}
+        except:
+            return {}
+    
+    async def update_ticket(self, ticket_id: int, updates: dict):
+        """Update ticket information"""
+        try:
+            if self.db_type == 'json':
+                async with aiofiles.open('data/tickets.json', 'r+') as f:
+                    data = json.loads(await f.read())
+                    if str(ticket_id) in data:
+                        data[str(ticket_id)].update(updates)
+                        await f.seek(0)
+                        await f.write(json.dumps(data, indent=2))
+                        await f.truncate()
+            else:
+                # Build SQL SET clause
+                set_parts = []
+                values = []
+                for i, (key, value) in enumerate(updates.items()):
+                    set_parts.append(f"{key} = ${i+1}")
+                    if isinstance(value, dict):
+                        values.append(json.dumps(value))
+                    else:
+                        values.append(value)
+                
+                values.append(ticket_id)
+                sql = f"UPDATE tickets SET {', '.join(set_parts)} WHERE id = ${len(values)}"
+                async with self.pool.acquire() as conn:
+                    await conn.execute(sql, *values)
+        except Exception as e:
+            logger.error(f"Failed to update ticket: {e}")
     
     async def close(self):
         """Close database connections"""
