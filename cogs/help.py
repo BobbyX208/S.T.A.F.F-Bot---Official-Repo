@@ -1,8 +1,8 @@
 import discord
 from discord.ext import commands
-import asyncio
 from discord import app_commands
 import time
+import asyncio
 from datetime import datetime, timedelta
 from utils.logger import get_logger
 
@@ -16,13 +16,25 @@ class Help(commands.Cog):
         self.bot.remove_command('help')  # Remove default help
         self.start_time = time.time()
     
+    def get_prefix(self):
+        """Get the actual command prefix as a string"""
+        prefix = self.bot.command_prefix
+        
+        if callable(prefix):
+            if hasattr(prefix, '__self__'):
+                try:
+                    if 'when_mentioned_or' in str(prefix):
+                        # Default to '!' if we can't determine
+                        return '!'
+                except:
+                    pass
+            return '!'  # Default fallback
+        
+        return prefix
+    
     def get_command_signature(self, command):
         """Get command signature with prefix"""
-        prefix = self.bot.command_prefix
-        if callable(prefix):
-            # If prefix is a callable (like when_mentioned), get a sample
-            prefix = prefix(self.bot, discord.Message) or '!'
-        
+        prefix = self.get_prefix()
         signature = f"{prefix}{command.qualified_name}"
         if command.signature:
             signature += f" {command.signature}"
@@ -34,11 +46,11 @@ class Help(commands.Cog):
         if not cog:
             return []
         
-        commands = []
+        commands_list = []
         for cmd in cog.walk_commands():
             if not cmd.hidden:
-                commands.append(cmd)
-        return commands
+                commands_list.append(cmd)
+        return commands_list
     
     # =========================================================================
     # PING COMMAND
@@ -54,8 +66,8 @@ class Help(commands.Cog):
         msg = await ctx.send("🏓 Pinging...")
         
         # Calculate response times
-        response_time = round((time.time() - start_time) * 1000)  # ms
-        ws_latency = round(self.bot.latency * 1000)  # ms
+        response_time = round((time.time() - start_time) * 1000)
+        ws_latency = round(self.bot.latency * 1000)
         uptime_seconds = time.time() - self.start_time
         uptime = str(timedelta(seconds=int(uptime_seconds)))
         
@@ -76,7 +88,7 @@ class Help(commands.Cog):
         # Edit the message with embed
         await msg.edit(content=None, embed=embed)
         
-        # Auto-delete after 3 minutes (180 seconds)
+        # Auto-delete after 3 minutes
         await asyncio.sleep(180)
         try:
             await msg.delete()
@@ -158,9 +170,10 @@ class Help(commands.Cog):
             
         else:
             # Show all commands grouped by cog
+            prefix = self.get_prefix()
             embed = discord.Embed(
                 title="📚 Command List",
-                description=f"Use `{self.bot.command_prefix}help <command>` for more info on a command.",
+                description=f"Use `{prefix}help <command>` for more info on a command.",
                 color=0x5865F2,
                 timestamp=datetime.utcnow()
             )
@@ -171,8 +184,8 @@ class Help(commands.Cog):
                 if not cog:
                     continue
                 
-                # Skip hidden cogs (optional)
-                if cog_name in ['Help']:  # Add any cogs you want to hide
+                # Skip hidden cogs
+                if cog_name in ['Help']:
                     continue
                 
                 # Get commands from this cog
@@ -182,7 +195,7 @@ class Help(commands.Cog):
                 
                 # Format commands
                 cmd_text = ""
-                for cmd in commands_list[:10]:  # Limit to 10 commands per cog
+                for cmd in commands_list[:10]:
                     if not cmd.hidden:
                         cmd_text += f"`{cmd.name}` "
                 
@@ -205,12 +218,12 @@ class Help(commands.Cog):
             
             msg = await ctx.send(embed=embed)
         
-        # Auto-delete after 3 minutes (180 seconds) for both cases
+        # Auto-delete after 3 minutes
         await asyncio.sleep(180)
         try:
             await msg.delete()
             # Also try to delete the command message if possible
-            if not ctx.interaction:  # Only for prefix commands
+            if not ctx.interaction:
                 await ctx.message.delete()
         except:
             pass
@@ -249,9 +262,7 @@ class Help(commands.Cog):
     async def invite(self, ctx: commands.Context):
         """Get bot invite link"""
         # Generate invite link with required permissions
-        permissions = discord.Permissions(
-            administrator=True  # Change this to specific permissions if needed
-        )
+        permissions = discord.Permissions(administrator=True)
         
         invite_link = discord.utils.oauth_url(
             self.bot.user.id,
