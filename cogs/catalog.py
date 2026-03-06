@@ -326,9 +326,11 @@ class CategorySelect(discord.ui.Select):
 
 class CatalogView(discord.ui.View):
     def __init__(self, guild_id: int, catalog: Catalog):
-        # IMPORTANT: The view itself MUST have a custom_id for persistence
-        super().__init__(timeout=None, custom_id=f"catalog_view_{guild_id}")
+        super().__init__(timeout=None)
         self.add_item(CategorySelect(guild_id, catalog))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return True
 
 # ============================================================================
 # SETUP MODAL
@@ -585,7 +587,7 @@ class PricingTicketSystem(commands.Cog):
             except Exception as e:
                 logger.error(f"Failed to register view for guild {guild.id}: {e}")
     
-    @app_commands.command(name="setup", description="Configure the ticket system")
+    @app_commands.command(name="catalog-setup", description="Configure the ticket system")
     @app_commands.default_permissions(administrator=True)
     async def setup(self, interaction: discord.Interaction):
         """Setup the ticket system"""
