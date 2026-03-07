@@ -227,7 +227,7 @@ class DatabaseHandler:
                         return ticket_id
             else:
                 # JSON fallback
-                filename = 'data/tickets.json'
+                filename = './tickets.json'
                 
                 if os.path.exists(filename):
                     async with aiofiles.open(filename, 'r') as f:
@@ -266,7 +266,7 @@ class DatabaseHandler:
                         return result
             else:
                 # JSON fallback
-                filename = 'data/tickets.json'
+                filename = './tickets.json'
                 if os.path.exists(filename):
                     async with aiofiles.open(filename, 'r') as f:
                         data = json.loads(await f.read())
@@ -299,7 +299,7 @@ class DatabaseHandler:
                         return await cursor.fetchone()
             else:
                 # JSON fallback
-                filename = 'data/tickets.json'
+                filename = './tickets.json'
                 if os.path.exists(filename):
                     async with aiofiles.open(filename, 'r') as f:
                         data = json.loads(await f.read())
@@ -334,7 +334,7 @@ class DatabaseHandler:
                 logger.info(f"Updated ticket {ticket_id}")
             else:
                 # JSON fallback
-                filename = 'data/tickets.json'
+                filename = './tickets.json'
                 if os.path.exists(filename):
                     async with aiofiles.open(filename, 'r') as f:
                         data = json.loads(await f.read())
@@ -369,7 +369,7 @@ class DatabaseHandler:
                         return [r[0] for r in results]
             else:
                 # JSON fallback
-                filename = 'data/catalog.json'
+                filename = './catalog.json'
                 if os.path.exists(filename):
                     async with aiofiles.open(filename, 'r') as f:
                         data = json.loads(await f.read())
@@ -392,7 +392,7 @@ class DatabaseHandler:
                         return await cursor.fetchall()
             else:
                 # JSON fallback
-                filename = 'data/catalog.json'
+                filename = './catalog.json'
                 if os.path.exists(filename):
                     async with aiofiles.open(filename, 'r') as f:
                         data = json.loads(await f.read())
@@ -416,7 +416,7 @@ class DatabaseHandler:
                 logger.info(f"Added catalog item: {name}")
             else:
                 # JSON fallback
-                filename = 'data/catalog.json'
+                filename = './catalog.json'
                 
                 if os.path.exists(filename):
                     async with aiofiles.open(filename, 'r') as f:
