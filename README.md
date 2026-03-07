@@ -1,4 +1,3 @@
-```markdown
 # 🤖 S.T.A.F.F. Bot
 
 > **A minimal Discord staff bot with SQLite and auto-updates**
@@ -53,8 +52,7 @@ Requirements
 · SQLite3
 · Discord bot token
 
+---
+
 License
-
 MIT
-
-```
