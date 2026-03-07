@@ -24,8 +24,8 @@
 
 ```bash
 # Clone
-git clone https://github.com/yourusername/staff-bot.git
-cd staff-bot
+git clone https://github.com/BobbyX208/S.T.A.F.F-Bot---Official-Repo.git
+cd S.T.A.F.F-Bot---Official-Repo
 
 # Setup
 python setup.py
